@@ -5,30 +5,74 @@
 // #include <gfxfont.h>
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
+
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
 /*
   Dive Computer
 */
 
 #include <Arduino.h>
 #include <Adafruit_ILI9341.h>   // include Adafruit ILI9341 TFT library
-#include <Adafruit_TinyUSB.h>
 
 #define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 240
 
-#define TFT_CS 6      
+#define BUT0_APIN A6
+#define BUT1_APIN A7
+
+#define TFT_CS 2      
 #define TFT_RST 3     
-#define TFT_DC 2  
-#define TFT_LED 7
+#define TFT_DC 4  
+#define TFT_LED 5
+
+
+//bluetooth
+BLEServer* pServer = NULL;
+BLECharacteristic* pCharacteristic;
+bool deviceConnected = false;
+
+#define SERVICE_UUID        "12345678-1234-1234-1234-123456789abc"
+#define CHARACTERISTIC_UUID "abcd1234-ab12-cd34-ef56-1234567890ab"
+
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    deviceConnected = true;
+  }
+
+  void onDisconnect(BLEServer* pServer) {
+    deviceConnected = false;
+  }
+};
+
+void setupBluetooth() {
+  BLEDevice::init("Dive Logic - The Wrasse V1");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  pCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID,
+                      BLECharacteristic::PROPERTY_READ |
+                      BLECharacteristic::PROPERTY_WRITE
+                    );
+
+  pCharacteristic->setValue("Hello BLE");
+  pService->start();
+  pServer->getAdvertising()->start();
+}
+
 
 // initialize ILI9341 TFT library
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
 
-
 //Screen 
 void screenLED(bool on){
   uint32_t pinVal = on ? 1 : 0; 
-  digitalWrite(7, pinVal);
+  digitalWrite(TFT_LED, pinVal);
 }
 
 void screenClear(){
@@ -36,7 +80,7 @@ void screenClear(){
 }
 
 void screenInit(){
-  pinMode(7, OUTPUT);
+  pinMode(TFT_LED, OUTPUT);
   screenLED(true);
  
   tft.begin();
@@ -122,7 +166,7 @@ void drawDepthAndTime(int64_t x, int64_t y){
   tft.println("M");
 
   //time
-  tft.setCursor(x+5, y+70);
+  tft.setCursor(x+10, y+70);
   tft.setTextColor(ILI9341_BLUE);  
   tft.setTextSize(2);
   tft.println("TIME");
@@ -206,12 +250,65 @@ void drawJokeTC(int16_t x, int16_t y){
   tft.println("Terms of use: Don't be a F**CKING IDIOT");
 }
 
+void drawTextWithBackground(int16_t x, int16_t y, uint8_t size, uint16_t color, uint16_t backgroundColor, const char* text){
+  tft.setCursor(x, y);
+  tft.setTextColor(ILI9341_WHITE);  
+  tft.setTextSize(1);
+  int16_t x1;
+  int16_t y1;
+  uint16_t w;
+  uint16_t h;
+  tft.getTextBounds(text, x, y, &x1, &y1, &w, &h); 
+  tft.fillRect(x, y, w, h, backgroundColor); 
+  tft.print(text); 
+}
 
+
+//handle buttons
+unsigned long butDebounceDelay = 50; 
+
+bool but0LastReading = false; 
+bool but0State = false; 
+unsigned long but0Time = 0;
+
+bool but1LastReading = false; 
+bool but1State = false; 
+unsigned long but1Time = 0;
+
+void updateButtons(){
+  unsigned int but0a = analogRead(BUT0_APIN);
+  bool but0Reading = but0a > 900 ? false : true; 
+
+  if(but0Reading != but0LastReading){
+    but0Time = millis(); 
+  }
+  but0LastReading = but0Reading; 
+
+  if ((millis() - but0Time) > butDebounceDelay) {
+    if(but0Reading != but0State){
+      but0State = but0Reading; 
+    }
+  }
+
+  unsigned int but1a = analogRead(BUT1_APIN);
+  bool but1Reading = but1a > 900 ? false : true; 
+
+  if(but1Reading != but1LastReading){
+    but1Time = millis(); 
+  }
+  but1LastReading = but1Reading; 
+
+  if ((millis() - but1Time) > butDebounceDelay) {
+    if(but1Reading != but1State){
+      but1State = but1Reading; 
+    }
+  }
+}
 
 
 // the setup function runs once when you press reset or power the board
 
-int16_t batteryPercent = 100;
+float batteryPercent = 100;
 
 void setup() {
   Serial.begin(9600);
@@ -227,15 +324,26 @@ void setup() {
   drawDepthAndTime(0, 0); 
   drawStopNDL(150, 0);
   drawMODTempTime(0, 150); 
-  drawJokeTC(0, 230); 
+  drawJokeTC(30, 230); 
+
+  setupBluetooth(); 
   
 }
+
 
 // the loop function runs over and over again forever
 void loop() {
   //screen_clear(); 
-  drawBatteryIndicator(SCREEN_WIDTH-30, 1, 24, 10, batteryPercent);
+  drawBatteryIndicator(SCREEN_WIDTH-30, 1, 24, 10, (uint16_t)batteryPercent);
   //drawButtonPressPulsate(200, 100, 40, 100, 1, batteryPercent); 
-  delay(100);
-  batteryPercent -= 1;
+
+  updateButtons(); 
+
+  uint16_t buttonFlashWidth = 15; 
+  uint16_t buttonFlashHeight = 30; 
+  tft.fillRect(SCREEN_WIDTH-buttonFlashWidth, SCREEN_HEIGHT-buttonFlashHeight, buttonFlashWidth, buttonFlashHeight, but0State ? ILI9341_WHITE : ILI9341_BLACK);
+  tft.fillRect(0, SCREEN_HEIGHT-buttonFlashHeight, buttonFlashWidth, buttonFlashHeight, but1State ? ILI9341_WHITE : ILI9341_BLACK);
+
+  delay(2);
+  batteryPercent -= 0.01;
 }
