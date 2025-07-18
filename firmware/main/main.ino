@@ -1,8 +1,5 @@
 #include <Adafruit_GFX.h>
-// #include <Adafruit_GrayOLED.h>
 #include <Adafruit_SPITFT.h>
-// #include <Adafruit_SPITFT_Macros.h>
-// #include <gfxfont.h>
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
 
@@ -11,9 +8,11 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
-/*
-  Dive Computer
-*/
+#define _TIMERINTERRUPT_LOGLEVEL_     4               //From 0 - 4 No idea what this means
+#define USING_TIM_DIV1                false           // for shortest and most accurate timer
+#define USING_TIM_DIV16               false           // for medium time and medium accurate timer
+#define USING_TIM_DIV256              true            // for longest timer but least accurate. Default
+#include <ESP32Time.h>
 
 #include <Arduino.h>
 #include <Adafruit_ILI9341.h>   // include Adafruit ILI9341 TFT library
@@ -264,6 +263,10 @@ void drawTextWithBackground(int16_t x, int16_t y, uint8_t size, uint16_t color, 
 }
 
 
+//Time tracking
+//ESP32Time rtc(offset);
+
+
 //handle buttons
 unsigned long butDebounceDelay = 50; 
 
@@ -306,6 +309,44 @@ void updateButtons(){
 }
 
 
+//Set up hardware timer ISR 
+hw_timer_t *timer0 = NULL;
+portMUX_TYPE timerMux0 = portMUX_INITIALIZER_UNLOCKED;
+
+#define TIMER0_INTERVAL_MS 300
+bool ledState = false; 
+void IRAM_ATTR onTimer0() {
+
+  portENTER_CRITICAL_ISR(&timerMux0);
+  ledState = !ledState;
+  if(ledState){
+    digitalWrite(LED_RED, 1);
+  }
+  else {
+    digitalWrite(LED_RED, 0);
+  }
+  //digitalWrite(LED_PIN, ledState);
+  portEXIT_CRITICAL_ISR(&timerMux0);
+}
+
+void initHardwareTimers(){
+  // Initialize the timer
+  // timerBegin(timer number [0-3], prescaler, countUp)
+  timer0 = timerBegin(0, 8000, true); // 8000 prescaler = 1us tick (80MHz/8000)
+
+  // Attach the interrupt
+  // timerAttachInterrupt(timer, ISR, edge)
+  timerAttachInterrupt(timer0, &onTimer0, true);
+
+  // Set the timer alarm
+  // timerAlarmWrite(timer, ticks, auto-reload)
+  timerAlarmWrite(timer0, 5000, true); // 5000 us = 0.5s
+
+  // Enable the alarm
+  timerAlarmEnable(timer0);
+}
+
+
 // the setup function runs once when you press reset or power the board
 
 float batteryPercent = 100;
@@ -315,10 +356,12 @@ void setup() {
   Serial.println("ILI9341 Test!"); 
 
   // initialize digital pin LED_BUILTIN as an output.
-  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
 
   //init the screen hardware
   screenInit(); 
+
+  initHardwareTimers(); 
 
   drawGridLines(); 
   drawDepthAndTime(0, 0); 
