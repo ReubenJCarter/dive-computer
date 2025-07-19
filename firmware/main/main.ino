@@ -1,8 +1,5 @@
 #include <Adafruit_GFX.h>
-// #include <Adafruit_GrayOLED.h>
 #include <Adafruit_SPITFT.h>
-// #include <Adafruit_SPITFT_Macros.h>
-// #include <gfxfont.h>
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
 
@@ -11,12 +8,22 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
-/*
-  Dive Computer
-*/
+#define _TIMERINTERRUPT_LOGLEVEL_     4               //From 0 - 4 No idea what this means
+#define USING_TIM_DIV1                false           // for shortest and most accurate timer
+#define USING_TIM_DIV16               false           // for medium time and medium accurate timer
+#define USING_TIM_DIV256              true            // for longest timer but least accurate. Default
+#include <ESP32Time.h>
 
 #include <Arduino.h>
 #include <Adafruit_ILI9341.h>   // include Adafruit ILI9341 TFT library
+
+#include <SPI.h>
+#include <SD.h>
+#include "driver/spi_common.h"  // Needed for SPI2_HOST, SPI3_HOST
+#include <ArduinoJson.h>
+
+#include <Wire.h> //I2C library
+#include <MS5837.h>
 
 #define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 240
@@ -29,6 +36,106 @@
 #define TFT_DC 4  
 #define TFT_LED 5
 
+#define SD_CS 20
+
+#define SPI_MISO 12
+#define SPI_MOSI 11
+#define SPI_CLK 13
+
+SPIClass SPI_CUSTOM(SPI2_HOST);
+
+void initSPI(){
+  SPI_CUSTOM.begin(SPI_CLK, SPI_MISO, SPI_MOSI, -1); 
+}
+
+void initI2C(){
+  Wire.begin();
+  //Wire.setClock(400000);
+}
+
+//Pressure temp sensor
+MS5837 pressureSensor;
+void initPressureSensor(){
+  // Initialize pressure sensor
+  // Returns true if initialization was successful
+  // We can't continue with the rest of the program unless we can initialize the sensor
+  delay(500); 
+  if(!pressureSensor.init()) {
+    Serial.println("Pressure sensor init failed!");
+    return; 
+  }
+
+  pressureSensor.setFluidDensity(1029); // kg/m^3 (997 freshwater, 1029 for seawater)
+}
+
+void pressureSensorMakeReading(){
+  pressureSensor.read(); 
+}
+
+float pressureSensorGetTemperature(){
+  return pressureSensor.temperature();
+}
+
+float pressureSensorGetPressure(){
+  return pressureSensor.pressure();
+}
+
+float pressureSensorGetDepth(){
+  return pressureSensor.depth();  
+}
+
+float pressureSensorGetAltitude(){
+  return pressureSensor.altitude();
+}
+
+//sd Card
+#define CONFIG_FILE_NAME "/config.json"
+JsonDocument config; 
+
+void initSD(){
+
+  //fire the sd card up
+  Serial.println("Init SD..."); 
+  
+  int sdInited = SD.begin(SD_CS, SPI_CUSTOM); 
+  
+  if(!sdInited){
+    Serial.println("Could not Init SD"); 
+    return; 
+  }
+
+  //check if config file exists. If it does not, make it with default config
+  bool configExists = SD.exists(CONFIG_FILE_NAME) ? true : false; 
+  if(!configExists){
+    Serial.println("Making config file"); 
+    
+    JsonDocument defaultConfig;
+    defaultConfig["deviceModel"] = "wrasse";
+
+    File defaultConfigFile = SD.open(CONFIG_FILE_NAME, FILE_WRITE);
+    if(defaultConfigFile){
+      serializeJson(defaultConfig, defaultConfigFile);
+    }
+    else {
+      Serial.println("Could not open the config file for write");
+    }
+    defaultConfigFile.close();  
+  }
+
+  //Read in the JSON config file
+  Serial.println("Reading config file..."); 
+  File configFile = SD.open(CONFIG_FILE_NAME, FILE_READ);
+  if(configFile){
+    configFile.seek(0); 
+    String json = configFile.readString(); 
+    DeserializationError error = deserializeJson(config, json);
+    configFile.close(); 
+  }
+  else {
+    Serial.println("Could not open the config file for reading");
+  }
+
+}
 
 //bluetooth
 BLEServer* pServer = NULL;
@@ -66,29 +173,32 @@ void setupBluetooth() {
 }
 
 
-// initialize ILI9341 TFT library
-Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
+//Screen
+Adafruit_ILI9341* tft; 
 
-//Screen 
+
 void screenLED(bool on){
   uint32_t pinVal = on ? 1 : 0; 
   digitalWrite(TFT_LED, pinVal);
 }
 
 void screenClear(){
-  tft.fillScreen(ILI9341_BLACK);
+  tft->fillScreen(ILI9341_BLACK);
 }
 
 void screenInit(){
+
+  tft = new Adafruit_ILI9341(&SPI_CUSTOM, TFT_DC, TFT_CS, TFT_RST); 
+
   pinMode(TFT_LED, OUTPUT);
   screenLED(true);
  
-  tft.begin();
-  tft.setRotation(3);
-  tft.setSPISpeed(16000000UL);
+  tft->begin();
+  tft->setRotation(3);
+  tft->setSPISpeed(16000000UL);
 
-  tft.setFont(&FreeSans9pt7b);
-  tft.setFont(NULL);
+  tft->setFont(&FreeSans9pt7b);
+  tft->setFont(NULL);
 
   screenClear(); 
 }
@@ -117,14 +227,14 @@ void drawBatteryIndicator(int16_t x, int16_t y, int16_t width, int16_t height, i
 
   int16_t innerGap = 2; 
 
-  tft.fillRect(x, y, width, height, ILI9341_BLACK); 
-  tft.drawRect(x, y, width, height, color);
-  tft.drawRect(x+width, y+3, 5, height-6, color);
+  tft->fillRect(x, y, width, height, ILI9341_BLACK); 
+  tft->drawRect(x, y, width, height, color);
+  tft->drawRect(x+width, y+3, 5, height-6, color);
 
   int16_t maxW = width-innerGap*2; 
   int16_t w = ((int32_t)(maxW * percent)) / 100;  
 
-  tft.fillRect(x+innerGap, y+innerGap, w, height-innerGap*2, color);
+  tft->fillRect(x+innerGap, y+innerGap, w, height-innerGap*2, color);
 }
 
 void drawButtonPressPulsate(int16_t x, int16_t y, int16_t width, int16_t height, int16_t direction, int16_t percent){
@@ -136,132 +246,136 @@ void drawButtonPressPulsate(int16_t x, int16_t y, int16_t width, int16_t height,
   int16_t w = ((int32_t)(width * percent)) / 100;  
 
   if(direction == 0){
-    tft.fillRect(x+w, y, width-w, height, ILI9341_BLACK); 
-    tft.fillRect(x, y, w, height, ILI9341_WHITE); 
+    tft->fillRect(x+w, y, width-w, height, ILI9341_BLACK); 
+    tft->fillRect(x, y, w, height, ILI9341_WHITE); 
   }
   else {
-    tft.fillRect(x, y, width-w, height, ILI9341_BLACK); 
-    tft.fillRect(x+width-w, y, w, height, ILI9341_WHITE); 
+    tft->fillRect(x, y, width-w, height, ILI9341_BLACK); 
+    tft->fillRect(x+width-w, y, w, height, ILI9341_WHITE); 
   }
 }
 
 void drawGridLines(){
   int16_t lineThickness = 3; 
   int16_t boxH = 150; 
-  tft.fillRect(145, 0, lineThickness, boxH, ILI9341_BLUE); 
-  tft.fillRect(0, boxH, SCREEN_WIDTH, lineThickness, ILI9341_BLUE); 
+  tft->fillRect(145, 0, lineThickness, boxH, ILI9341_BLUE); 
+  tft->fillRect(0, boxH, SCREEN_WIDTH, lineThickness, ILI9341_BLUE); 
 }
 
 void drawDepthAndTime(int64_t x, int64_t y){
 
   //depth
-  tft.setCursor(x+30, y+10);
-  tft.setTextColor(ILI9341_WHITE);  
-  tft.setTextSize(6);
-  tft.println("24");
+  tft->setCursor(x+30, y+10);
+  tft->setTextColor(ILI9341_WHITE);  
+  tft->setTextSize(6);
+  tft->println("24");
 
-  tft.setCursor(x+110, y+30);
-  tft.setTextColor(ILI9341_BLUE);  
-  tft.setTextSize(3);
-  tft.println("M");
+  tft->setCursor(x+110, y+30);
+  tft->setTextColor(ILI9341_BLUE);  
+  tft->setTextSize(3);
+  tft->println("M");
 
   //time
-  tft.setCursor(x+10, y+70);
-  tft.setTextColor(ILI9341_BLUE);  
-  tft.setTextSize(2);
-  tft.println("TIME");
+  tft->setCursor(x+10, y+70);
+  tft->setTextColor(ILI9341_BLUE);  
+  tft->setTextSize(2);
+  tft->println("TIME");
 
-  tft.setCursor(x+30, y+93);
-  tft.setTextColor(ILI9341_WHITE);  
-  tft.setTextSize(3);
-  tft.println("12:42");
+  tft->setCursor(x+30, y+93);
+  tft->setTextColor(ILI9341_WHITE);  
+  tft->setTextSize(3);
+  tft->println("12:42");
 }
 
 void drawStopNDL(int64_t x, int64_t y){
   //SAFTY STOP
-  tft.setCursor(x+5, y+10);
-  tft.setTextColor(ILI9341_BLUE);  
-  tft.setTextSize(2);
-  tft.println("SAFTEY STOP");
+  tft->setCursor(x+5, y+10);
+  tft->setTextColor(ILI9341_BLUE);  
+  tft->setTextSize(2);
+  tft->println("SAFTEY STOP");
 
-  tft.setCursor(x+30, y+32);
-  tft.setTextColor(ILI9341_WHITE);  
-  tft.setTextSize(3);
-  tft.println("3:00");
+  tft->setCursor(x+30, y+32);
+  tft->setTextColor(ILI9341_WHITE);  
+  tft->setTextSize(3);
+  tft->println("3:00");
 
   //NDL
-  tft.setCursor(x+5, y+70);
-  tft.setTextColor(ILI9341_BLUE);  
-  tft.setTextSize(2);
-  tft.println("NDL");
+  tft->setCursor(x+5, y+70);
+  tft->setTextColor(ILI9341_BLUE);  
+  tft->setTextSize(2);
+  tft->println("NDL");
 
-  tft.setCursor(x+30, y+93);
-  tft.setTextColor(ILI9341_WHITE);  
-  tft.setTextSize(3);
-  tft.println("12:42");
+  tft->setCursor(x+30, y+93);
+  tft->setTextColor(ILI9341_WHITE);  
+  tft->setTextSize(3);
+  tft->println("12:42");
 }
 
 void drawMODTempTime(int16_t x, int16_t y){
   //Air 
-  tft.setCursor(x+5, y+30);
-  tft.setTextColor(ILI9341_WHITE);  
-  tft.setTextSize(3);
-  tft.println("AIR");
+  tft->setCursor(x+5, y+30);
+  tft->setTextColor(ILI9341_WHITE);  
+  tft->setTextSize(3);
+  tft->println("AIR");
 
   //MOD 
-  tft.setCursor(x+100, y+10);
-  tft.setTextColor(ILI9341_BLUE);  
-  tft.setTextSize(2);
-  tft.println("MOD");
+  tft->setCursor(x+100, y+10);
+  tft->setTextColor(ILI9341_BLUE);  
+  tft->setTextSize(2);
+  tft->println("MOD");
 
-  tft.setCursor(x+100, y+30);
-  tft.setTextColor(ILI9341_WHITE);  
-  tft.setTextSize(3);
-  tft.println("55");
-
-  //temp
-  tft.setCursor(x+250, y+20);
-  tft.setTextColor(ILI9341_WHITE);  
-  tft.setTextSize(2);
-  tft.println("15");
-
-  tft.setCursor(x+280, y+20);
-  tft.setTextColor(ILI9341_BLUE);  
-  tft.setTextSize(2);
-  tft.println("C");
+  tft->setCursor(x+100, y+30);
+  tft->setTextColor(ILI9341_WHITE);  
+  tft->setTextSize(3);
+  tft->println("55");
 
   //temp
-  tft.setCursor(x+210, y+50);
-  tft.setTextColor(ILI9341_WHITE);  
-  tft.setTextSize(2);
-  tft.println("11:00");
+  tft->setCursor(x+250, y+20);
+  tft->setTextColor(ILI9341_WHITE);  
+  tft->setTextSize(2);
+  tft->println("15");
 
-  tft.setCursor(x+280, y+50);
-  tft.setTextColor(ILI9341_BLUE);  
-  tft.setTextSize(2);
-  tft.println("AM");
+  tft->setCursor(x+280, y+20);
+  tft->setTextColor(ILI9341_BLUE);  
+  tft->setTextSize(2);
+  tft->println("C");
+
+  //temp
+  tft->setCursor(x+210, y+50);
+  tft->setTextColor(ILI9341_WHITE);  
+  tft->setTextSize(2);
+  tft->println("11:00");
+
+  tft->setCursor(x+280, y+50);
+  tft->setTextColor(ILI9341_BLUE);  
+  tft->setTextSize(2);
+  tft->println("AM");
 
 }
 
 void drawJokeTC(int16_t x, int16_t y){
-  tft.setCursor(x, y);
-  tft.setTextColor(ILI9341_WHITE);  
-  tft.setTextSize(1);
-  tft.println("Terms of use: Don't be a F**CKING IDIOT");
+  tft->setCursor(x, y);
+  tft->setTextColor(ILI9341_WHITE);  
+  tft->setTextSize(1);
+  tft->println("Terms of use: Don't be a F**CKING IDIOT");
 }
 
 void drawTextWithBackground(int16_t x, int16_t y, uint8_t size, uint16_t color, uint16_t backgroundColor, const char* text){
-  tft.setCursor(x, y);
-  tft.setTextColor(ILI9341_WHITE);  
-  tft.setTextSize(1);
+  tft->setCursor(x, y);
+  tft->setTextColor(ILI9341_WHITE);  
+  tft->setTextSize(1);
   int16_t x1;
   int16_t y1;
   uint16_t w;
   uint16_t h;
-  tft.getTextBounds(text, x, y, &x1, &y1, &w, &h); 
-  tft.fillRect(x, y, w, h, backgroundColor); 
-  tft.print(text); 
+  tft->getTextBounds(text, x, y, &x1, &y1, &w, &h); 
+  tft->fillRect(x, y, w, h, backgroundColor); 
+  tft->print(text); 
 }
+
+
+//Time tracking
+//ESP32Time rtc(offset);
 
 
 //handle buttons
@@ -306,19 +420,64 @@ void updateButtons(){
 }
 
 
+//Set up hardware timer ISR 
+hw_timer_t *timer0 = NULL;
+bool timer0Flag = false; 
+portMUX_TYPE timerMux0 = portMUX_INITIALIZER_UNLOCKED;
+#define TIMER0_TIME_MS 500
+
+bool ledState = false; 
+void IRAM_ATTR onTimer0() {
+
+  portENTER_CRITICAL_ISR(&timerMux0);
+  timer0Flag = true; 
+ 
+  digitalWrite(LED_RED, 0);
+
+  portEXIT_CRITICAL_ISR(&timerMux0);
+}
+
+void initHardwareTimers(){
+
+
+  // Initialize the timer0: timerBegin(timer number [0-3], prescaler, countUp)
+  timer0 = timerBegin(0, 8000, true); // 8000 prescaler = 0.1ms tick (80MHz/8000)
+
+  // Attach the interrupt : timerAttachInterrupt(timer, ISR, edge)
+  timerAttachInterrupt(timer0, &onTimer0, true);
+ 
+  // Set the timer alarm: timerAlarmWrite(timer, ticks, auto-reload)
+  timerAlarmWrite(timer0, TIMER0_TIME_MS * 10, true);
+
+  // Enable the alarm
+  timerAlarmEnable(timer0);
+
+
+}
+
+
 // the setup function runs once when you press reset or power the board
 
 float batteryPercent = 100;
 
 void setup() {
-  Serial.begin(9600);
-  Serial.println("ILI9341 Test!"); 
+  //init serial output and wait for it to start up
+  Serial.begin(115200);
+  while (!Serial) {}
+  Serial.println("DiveLogic - Wrasse v1"); 
 
   // initialize digital pin LED_BUILTIN as an output.
-  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
 
-  //init the screen hardware
+  //init the hardware
+  initI2C(); 
+  initSPI();
+
+  initSD(); 
   screenInit(); 
+  initPressureSensor(); 
+
+  initHardwareTimers(); 
 
   drawGridLines(); 
   drawDepthAndTime(0, 0); 
@@ -333,17 +492,46 @@ void setup() {
 
 // the loop function runs over and over again forever
 void loop() {
-  //screen_clear(); 
+
+  
+  if(timer0Flag){
+    //Make pressure / temp reading
+    pressureSensorMakeReading(); 
+
+    float pressure = pressureSensorGetPressure();
+    Serial.print("Pressure:");
+    Serial.print(pressure);
+    Serial.print(",  ");
+
+    float depth = pressureSensorGetDepth();
+    Serial.print("Depth:");
+    Serial.print(depth);
+    Serial.print(",  ");
+
+    float temp = pressureSensorGetTemperature();
+    Serial.print("Temp:");
+    Serial.print(temp);
+    Serial.print(",  ");
+
+    float altitude = pressureSensorGetAltitude(); 
+    Serial.print("Alti:");
+    Serial.print(altitude);
+    Serial.print("\n");
+
+    timer0Flag = false;
+    digitalWrite(LED_RED, 1); 
+  }
+
+
+  //Re Rendering display
   drawBatteryIndicator(SCREEN_WIDTH-30, 1, 24, 10, (uint16_t)batteryPercent);
-  //drawButtonPressPulsate(200, 100, 40, 100, 1, batteryPercent); 
 
   updateButtons(); 
-
   uint16_t buttonFlashWidth = 15; 
   uint16_t buttonFlashHeight = 30; 
-  tft.fillRect(SCREEN_WIDTH-buttonFlashWidth, SCREEN_HEIGHT-buttonFlashHeight, buttonFlashWidth, buttonFlashHeight, but0State ? ILI9341_WHITE : ILI9341_BLACK);
-  tft.fillRect(0, SCREEN_HEIGHT-buttonFlashHeight, buttonFlashWidth, buttonFlashHeight, but1State ? ILI9341_WHITE : ILI9341_BLACK);
+  tft->fillRect(SCREEN_WIDTH-buttonFlashWidth, SCREEN_HEIGHT-buttonFlashHeight, buttonFlashWidth, buttonFlashHeight, but0State ? ILI9341_WHITE : ILI9341_BLACK);
+  tft->fillRect(0, SCREEN_HEIGHT-buttonFlashHeight, buttonFlashWidth, buttonFlashHeight, but1State ? ILI9341_WHITE : ILI9341_BLACK);
 
-  delay(2);
-  batteryPercent -= 0.01;
+  delay(30);
+  batteryPercent -= 0.05;
 }
