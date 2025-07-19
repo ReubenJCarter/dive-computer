@@ -22,6 +22,9 @@
 #include "driver/spi_common.h"  // Needed for SPI2_HOST, SPI3_HOST
 #include <ArduinoJson.h>
 
+#include <Wire.h> //I2C library
+#include <MS5837.h>
+
 #define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 240
 
@@ -45,8 +48,47 @@ void initSPI(){
   SPI_CUSTOM.begin(SPI_CLK, SPI_MISO, SPI_MOSI, -1); 
 }
 
-//sd Card
+void initI2C(){
+  Wire.begin();
+  //Wire.setClock(400000);
+}
 
+//Pressure temp sensor
+MS5837 pressureSensor;
+void initPressureSensor(){
+  // Initialize pressure sensor
+  // Returns true if initialization was successful
+  // We can't continue with the rest of the program unless we can initialize the sensor
+  delay(500); 
+  if(!pressureSensor.init()) {
+    Serial.println("Pressure sensor init failed!");
+    return; 
+  }
+
+  pressureSensor.setFluidDensity(1029); // kg/m^3 (997 freshwater, 1029 for seawater)
+}
+
+void pressureSensorMakeReading(){
+  pressureSensor.read(); 
+}
+
+float pressureSensorGetTemperature(){
+  return pressureSensor.temperature();
+}
+
+float pressureSensorGetPressure(){
+  return pressureSensor.pressure();
+}
+
+float pressureSensorGetDepth(){
+  return pressureSensor.depth();  
+}
+
+float pressureSensorGetAltitude(){
+  return pressureSensor.altitude();
+}
+
+//sd Card
 #define CONFIG_FILE_NAME "/config.json"
 JsonDocument config; 
 
@@ -380,39 +422,37 @@ void updateButtons(){
 
 //Set up hardware timer ISR 
 hw_timer_t *timer0 = NULL;
+bool timer0Flag = false; 
 portMUX_TYPE timerMux0 = portMUX_INITIALIZER_UNLOCKED;
+#define TIMER0_TIME_MS 500
 
-#define TIMER0_INTERVAL_MS 300
 bool ledState = false; 
 void IRAM_ATTR onTimer0() {
 
   portENTER_CRITICAL_ISR(&timerMux0);
-  ledState = !ledState;
-  if(ledState){
-    digitalWrite(LED_RED, 1);
-  }
-  else {
-    digitalWrite(LED_RED, 0);
-  }
-  //digitalWrite(LED_PIN, ledState);
+  timer0Flag = true; 
+ 
+  digitalWrite(LED_RED, 0);
+
   portEXIT_CRITICAL_ISR(&timerMux0);
 }
 
 void initHardwareTimers(){
-  // Initialize the timer
-  // timerBegin(timer number [0-3], prescaler, countUp)
-  timer0 = timerBegin(0, 8000, true); // 8000 prescaler = 1us tick (80MHz/8000)
 
-  // Attach the interrupt
-  // timerAttachInterrupt(timer, ISR, edge)
+
+  // Initialize the timer0: timerBegin(timer number [0-3], prescaler, countUp)
+  timer0 = timerBegin(0, 8000, true); // 8000 prescaler = 0.1ms tick (80MHz/8000)
+
+  // Attach the interrupt : timerAttachInterrupt(timer, ISR, edge)
   timerAttachInterrupt(timer0, &onTimer0, true);
-
-  // Set the timer alarm
-  // timerAlarmWrite(timer, ticks, auto-reload)
-  timerAlarmWrite(timer0, 5000, true); // 5000 us = 0.5s
+ 
+  // Set the timer alarm: timerAlarmWrite(timer, ticks, auto-reload)
+  timerAlarmWrite(timer0, TIMER0_TIME_MS * 10, true);
 
   // Enable the alarm
   timerAlarmEnable(timer0);
+
+
 }
 
 
@@ -421,18 +461,21 @@ void initHardwareTimers(){
 float batteryPercent = 100;
 
 void setup() {
+  //init serial output and wait for it to start up
   Serial.begin(115200);
   while (!Serial) {}
-   
-  Serial.println("ILI9341 Test!"); 
+  Serial.println("DiveLogic - Wrasse v1"); 
+
   // initialize digital pin LED_BUILTIN as an output.
   pinMode(LED_RED, OUTPUT);
 
-  //init the screen hardware
-
+  //init the hardware
+  initI2C(); 
   initSPI();
+
   initSD(); 
   screenInit(); 
+  initPressureSensor(); 
 
   initHardwareTimers(); 
 
@@ -449,15 +492,46 @@ void setup() {
 
 // the loop function runs over and over again forever
 void loop() {
+
+  
+  if(timer0Flag){
+    //Make pressure / temp reading
+    pressureSensorMakeReading(); 
+
+    float pressure = pressureSensorGetPressure();
+    Serial.print("Pressure:");
+    Serial.print(pressure);
+    Serial.print(",  ");
+
+    float depth = pressureSensorGetDepth();
+    Serial.print("Depth:");
+    Serial.print(depth);
+    Serial.print(",  ");
+
+    float temp = pressureSensorGetTemperature();
+    Serial.print("Temp:");
+    Serial.print(temp);
+    Serial.print(",  ");
+
+    float altitude = pressureSensorGetAltitude(); 
+    Serial.print("Alti:");
+    Serial.print(altitude);
+    Serial.print("\n");
+
+    timer0Flag = false;
+    digitalWrite(LED_RED, 1); 
+  }
+
+
+  //Re Rendering display
   drawBatteryIndicator(SCREEN_WIDTH-30, 1, 24, 10, (uint16_t)batteryPercent);
 
   updateButtons(); 
-
   uint16_t buttonFlashWidth = 15; 
   uint16_t buttonFlashHeight = 30; 
   tft->fillRect(SCREEN_WIDTH-buttonFlashWidth, SCREEN_HEIGHT-buttonFlashHeight, buttonFlashWidth, buttonFlashHeight, but0State ? ILI9341_WHITE : ILI9341_BLACK);
   tft->fillRect(0, SCREEN_HEIGHT-buttonFlashHeight, buttonFlashWidth, buttonFlashHeight, but1State ? ILI9341_WHITE : ILI9341_BLACK);
 
-  delay(2);
-  batteryPercent -= 0.01;
+  delay(30);
+  batteryPercent -= 0.05;
 }
