@@ -29,13 +29,16 @@ Price: £3.65
 
 Interface:SPI
 
+
 ### Battery 
 
 id:BAT
 
 500mah battery	
 
-[Data sheet and info on module](https://thepihut.com/products/500mah-3-7v-lipo-battery)	
+[Data sheet and info on module](https://cdn.shopify.com/s/files/1/0176/3274/files/LP503035_500mAh_3.7V_20190510.pdf?v=1665420199)
+
+[Buy](https://thepihut.com/products/500mah-3-7v-lipo-battery)	
 
 Price: £6			
 
