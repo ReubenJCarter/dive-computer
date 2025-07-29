@@ -1,3 +1,4 @@
+/*
 #include <Adafruit_GFX.h>
 #include <Adafruit_SPITFT.h>
 #include <Fonts/FreeSans9pt7b.h>
@@ -17,7 +18,7 @@
 #include <Arduino.h>
 #include <Adafruit_ILI9341.h>   // include Adafruit ILI9341 TFT library
 
-#include <SPI.h>
+
 #include <SD.h>
 #include "driver/spi_common.h"  // Needed for SPI2_HOST, SPI3_HOST
 #include <ArduinoJson.h>
@@ -534,4 +535,22 @@ void loop() {
 
   delay(30);
   batteryPercent -= 0.05;
+}
+*/
+
+#include "globalSystems.hpp"
+
+void setup() {
+    mcuSystem.begin();
+    sdCardSystem.begin();
+    bluetoothSystem.begin();
+    screenSystem.begin();
+    sensorSystem.begin();
+    compassSystem.begin();
+    buttonSystem.begin();
+    uiSystem.begin();
+}
+
+void loop() {
+
 }
