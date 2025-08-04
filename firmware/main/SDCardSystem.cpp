@@ -48,3 +48,14 @@ void SDCardSystem::begin() {
         Serial.println("Could not open the config file for reading");
     }
 }
+
+void SDCardSystem::writeConfig(){
+    File configFile = SD.open(CONFIG_FILE_NAME, FILE_WRITE);
+    if(configFile){
+        serializeJson(config, configFile);
+        configFile.close();
+    }
+    else {
+        Serial.println("Could not open the config file for writing");
+    }
+}

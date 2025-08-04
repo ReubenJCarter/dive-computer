@@ -538,19 +538,14 @@ void loop() {
 }
 */
 
-#include "globalSystems.hpp"
+#include "DiveComputer.hpp"
+
+DiveComputer diveComputer;
 
 void setup() {
-    mcuSystem.begin();
-    sdCardSystem.begin();
-    bluetoothSystem.begin();
-    screenSystem.begin();
-    sensorSystem.begin();
-    compassSystem.begin();
-    buttonSystem.begin();
-    uiSystem.begin();
+    diveComputer.begin();
 }
 
 void loop() {
-
+    diveComputer.update(); 
 }

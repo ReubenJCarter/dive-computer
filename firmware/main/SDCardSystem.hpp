@@ -9,12 +9,13 @@
 #include <ArduinoJson.h>
 
 class SDCardSystem {
-private:
-    JsonDocument config;    
 
 public:
+    JsonDocument config; 
+    
     SDCardSystem();
     void begin();
+    void writeConfig(); 
 }; 
 
 #endif // SD_CARD_SYSTEM_HPP
