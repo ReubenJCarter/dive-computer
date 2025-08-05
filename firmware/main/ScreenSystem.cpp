@@ -22,6 +22,12 @@ void ScreenSystem::begin() {
     tft->setFont(NULL);
 
     clearScreen(); 
+
+    drawGridLines(); 
+    drawDepthAndTime(0, 0); 
+    drawStopNDL(150, 0);
+    drawMODTempTime(0, 150); 
+    drawJokeTC(30, 230); 
 }
 
 void ScreenSystem::setScreenBacklight(bool on) {
