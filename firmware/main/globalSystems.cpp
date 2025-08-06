@@ -2,7 +2,7 @@
 
 MCUSystem mcuSystem;
 BluetoothSystem bluetoothSystem;
-ScreenSystem screenSystem;
+RenderSystem renderSystem;
 SensorSystem sensorSystem;
 SDCardSystem sdCardSystem;
 CompassSystem compassSystem;
