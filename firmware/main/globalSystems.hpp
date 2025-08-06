@@ -4,7 +4,7 @@
 #include "MCUSystem.hpp"
 #include "SDCardSystem.hpp"
 #include "BluetoothSystem.hpp"
-#include "ScreenSystem.hpp"
+#include "RenderSystem.hpp"
 #include "SensorSystem.hpp"
 #include "CompassSystem.hpp"
 #include "ButtonSystem.hpp"
@@ -19,8 +19,8 @@ extern SDCardSystem sdCardSystem;
 class BluetoothSystem;
 extern BluetoothSystem bluetoothSystem;
 
-class ScreenSystem;
-extern ScreenSystem screenSystem;
+class RenderSystem;
+extern RenderSystem renderSystem;
 
 class SensorSystem;
 extern SensorSystem sensorSystem;
